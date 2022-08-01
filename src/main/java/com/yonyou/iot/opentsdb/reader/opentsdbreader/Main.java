@@ -46,7 +46,7 @@ public class Main {
         String metainit = properties.getProperty("task.metainit");
         if(CharSequenceUtil.isNotEmpty(metainit)){
             Log.info("初始化元数据");
-            initMetricMeta();
+            initMetricMeta(storageGroup);
         }
         String address = properties.getProperty("task.otsserver");
         OpenTSDBConnection tsdbConn = new OpenTSDBConnection(address);
@@ -73,7 +73,7 @@ public class Main {
         }
     }
 
-    private static void initMetricMeta()throws Exception {
+    private static void initMetricMeta(String storageGroup)throws Exception {
         MetricTagManager tagManager = MetricTagManager.getInstance();
         File file = Paths.get("metric_meta.json").toFile();
         String content = FileUtils.readFileToString(file, StandardCharsets.UTF_8);
@@ -88,7 +88,7 @@ public class Main {
                                             c -> {
                                                 MetricTagMeta meta = new MetricTagMeta();
                                                 meta.setMetric(c.getMetric());
-                                                meta.setStorageGroup("root.yyy");
+                                                meta.setStorageGroup(storageGroup);
                                                 meta.setDataType(DataType.valueOf(c.getType().toUpperCase()));
                                                 List<String> tagList = new ArrayList<>(header);
                                                 if (CollUtil.isNotEmpty(c.getTags())) {
