@@ -7,7 +7,6 @@
 
 # BlueJ files
 *.ctxt
-
 # Mobile Tools for Java (J2ME)
 .mtj.tmp/
 
@@ -71,10 +70,13 @@ buildNumber.properties
 # .idea/compiler.xml
 # .idea/jarRepositories.xml
 # .idea/modules.xml
-# .idea/*.iml
+#
 # .idea/modules
 # *.iml
 # *.ipr
+.idea/*.xml
+.idea/sonarlint/*
+
 
 # CMake
 cmake-build-*/
