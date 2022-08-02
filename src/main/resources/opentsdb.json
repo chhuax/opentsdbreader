@@ -84,7 +84,7 @@
   "tsd.storage.hbase.tree_table": "tsdb-tree",
   "tsd.storage.hbase.uid_table": "tsdb-uid",
   "tsd.storage.hbase.zk_basedir": "/hbase",
-  "tsd.storage.hbase.zk_quorum": "10.3.5.39:2181,10.3.5.41:2181,10.3.5.40:2181",
+  "tsd.storage.hbase.zk_quorum": "172.20.24.121:2181,172.20.24.122:2181,172.20.24.124:2181",
   "tsd.storage.repair_appends": "false",
   "tsd.storage.use_max_value": "true",
   "tsd.storage.use_otsdb_timestamp": "false",

@@ -342,13 +342,6 @@
         ]
       },
       {
-        "metric": "host.cpu.usedpercent",
-        "type": "DOUBLE",
-        "tags": [
-          "cpunum"
-        ]
-      },
-      {
         "metric": "host.cpu.niceavgperc",
         "type": "DOUBLE",
         "tags": [

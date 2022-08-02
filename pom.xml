@@ -130,7 +130,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.yonyou.iot.opentsdb.reader.opentsdbreader.Main</mainClass>
+                            <mainClass>com.yonyou.iot.opentsdb.reader.tsfile.TsFile</mainClass>
                         </manifest>
                     </archive>
                     <descriptorRefs>
