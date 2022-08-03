@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 
 public class TsFile {
     private static final Logger LOG = LoggerFactory.getLogger(TsFile.class);
-    private static final ExecutorService pool = new ThreadPoolExecutor(1, 1, 6000L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(1024), new ThreadFactoryBuilder().setNameFormat("ts-file-thread-local-pool-%d").build(), new ThreadPoolExecutor.AbortPolicy());
+    private static final ExecutorService pool = new ThreadPoolExecutor(12, 12, 6000L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(1024), new ThreadFactoryBuilder().setNameFormat("ts-file-thread-local-pool-%d").build(), new ThreadPoolExecutor.AbortPolicy());
 
     public static void main(String[] args) {
         Properties properties = loadConfig();
@@ -41,7 +41,7 @@ public class TsFile {
         Map<String, MetricTagMeta> tagMap = buildTagMap();
         Map<String, List<String>> metricMap = buildEntityMap(storageGroup, tagMap.values());
         while (startTime.isBefore(endTime)) {
-            TsFileTask task = new TsFileTask(exportPath, storageGroup, tagMap, metricMap, startTime, tsdbConn);
+            TsFileTask task = new TsFileTask(exportPath, storageGroup, tagMap, metricMap, startTime, startTime.plusMonths(1), tsdbConn);
             pool.execute(task);
             startTime = startTime.plusMonths(1);
         }
@@ -86,6 +86,9 @@ public class TsFile {
                 metricMetaInfo.getHeader().stream().forEach(header -> metricTagOrderList.add(new MetricTagOrder(header, metricTagOrderList.size()+1)));
                 content.getTags().stream().forEach(tag -> metricTagOrderList.add(new MetricTagOrder(tag, metricTagOrderList.size()+1)));
                 metricTagMeta.setTagOrderList(metricTagOrderList);
+                if(content.getMetric().startsWith("metric_")){
+                    content.setMetric(content.getMetric().replace("metric_", ""));
+                }
                 map.put(content.getMetric(), metricTagMeta);
             });
         });

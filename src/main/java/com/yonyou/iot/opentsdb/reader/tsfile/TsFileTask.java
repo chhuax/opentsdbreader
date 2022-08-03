@@ -11,6 +11,9 @@ import com.yonyou.iotdb.metric.domain.MetricData;
 import com.yonyou.iotdb.metric.domain.MetricTagMeta;
 import com.yonyou.iotdb.metric.domain.MetricTagOrder;
 import com.yonyou.iotdb.utils.KeywordUtil;
+import org.apache.iotdb.tsfile.exception.write.WriteProcessException;
+import org.apache.iotdb.tsfile.file.metadata.enums.TSDataType;
+import org.apache.iotdb.tsfile.read.common.Path;
 import org.apache.iotdb.tsfile.write.TsFileWriter;
 import org.apache.iotdb.tsfile.write.record.Tablet;
 import org.apache.iotdb.tsfile.write.schema.MeasurementSchema;
@@ -19,9 +22,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.IOException;
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static com.yonyou.iotdb.constant.Constant.NULL_TAG_PLACEHOLDER;
@@ -35,64 +41,74 @@ public class TsFileTask implements Runnable{
     //指标
     private Map<String, List<String>> metricMap;
     //开始时间
-    private DateTime dateTime;
+    private DateTime startTime;
+    //结束时间
+    private DateTime endTime;
     //tsdb连接，获取zookeeper地址
     private OpenTSDBConnection conn;
     //数据模型的tagMap
     private Map<String, MetricTagMeta> tagMap;
-    //需写入tsFile的tablet
-    private Tablet tablet;
 
-    public TsFileTask(String exportPath, String storageGroup, Map<String, MetricTagMeta> tagMap, Map<String, List<String>> metricMap, DateTime dateTime, OpenTSDBConnection conn) {
+    public TsFileTask(String exportPath, String storageGroup, Map<String, MetricTagMeta> tagMap, Map<String, List<String>> metricMap, DateTime startTime, DateTime endTime, OpenTSDBConnection conn) {
         this.exportPath = exportPath;
         this.storageGroup = storageGroup;
         this.metricMap = metricMap;
-        this.dateTime = dateTime;
+        this.startTime = startTime;
+        this.endTime = endTime;
         this.conn = conn;
         this.tagMap = tagMap;
     }
 
     @Override
     public void run() {
+        Stopwatch watch = Stopwatch.createUnstarted();
         metricMap.entrySet().stream().forEach(device -> {
-            Stopwatch watch = Stopwatch.createUnstarted();
-            LOG.info("任务执行开始:device->{},dateTime->{}.",device.getKey(),dateTime);
-            try {
-                watch.start();
-                long startTime = dateTime.getMillis();
-                long endTime = dateTime.plusHours(1).getMillis();
-                List<MetricData> dataList = device.getValue().stream().parallel().flatMap(metric -> {
-                    try {
-                        List<MetricData> childList = OpenTSDBFactory.dump(conn, metric, startTime, endTime- 1);
-                        LOG.info("metric ->{}, count->{}", metric, childList.size());
-                        return childList.stream();
-                    } catch (Exception e) {
-                        LOG.error("scan数据失败,metric:{}",metric,e);
-                        throw new IoTDBSdkRuntimeException(e);
-                    }
-                }).collect(Collectors.toList());
-                watch.stop();
-                watch.start();
-                LOG.info("dataList size ->{}, 耗时->{}", dataList.size(), watch);
-                //生成tablet
-                buildTablet(device, dataList);
-                //写入tsFile
-                String fileName = getTsFileName(exportPath, storageGroup, device.getKey(), startTime);
-                LOG.info("fileName ->{}, 耗时->{}", fileName, watch);
-                File f = new File(fileName);
-                if (!f.getParentFile().exists()) {
-                    f.getParentFile().mkdirs();
-                }
-                TsFileWriter writer = new TsFileWriter(f);
-                writer.write(tablet);
-                writer.close();
-                watch.stop();
-                LOG.info("device:{},start->{},end->{},数据量->{},耗时->{}",device.getKey(),startTime,endTime,dataList.size(), watch);
-            } catch (Exception e) {
-                LOG.error("任务执行失败:",e);
-                throw new IoTDBSdkRuntimeException(e);
+            DateTime taskStartTime = new DateTime(startTime);
+            while (taskStartTime.isBefore(endTime)){
+                LOG.info("任务执行开始:device->{},dateTime->{}.",device.getKey(),taskStartTime);
+                DateTime taskEndTime = taskStartTime.plusHours(1);
+                executeTask(device, taskStartTime.getMillis(), taskEndTime.getMillis(), watch);
+                taskStartTime = taskEndTime;
             }
         });
+    }
+
+    private void executeTask(Map.Entry<String, List<String>> device, long taskStartTime, long taskEndTime, Stopwatch watch){
+        try {
+            watch.start();
+            List<MetricData> dataList = device.getValue().stream().parallel().flatMap(metric -> {
+                try {
+                    if(metric.startsWith("metric_")){
+                        metric = metric.replace("metric_", "");
+                    }
+                    return OpenTSDBFactory.dump(conn, metric, taskStartTime, taskEndTime- 1).stream();
+                } catch (Exception e) {
+                    LOG.error("scan数据失败,metric:{}",metric,e);
+                    throw new IoTDBSdkRuntimeException(e);
+                }
+            }).collect(Collectors.toList());
+            if(dataList == null || dataList.isEmpty()){
+                return;
+            }
+            watch.stop();
+            watch.start();
+            //创建tsFile
+            String fileName = getTsFileName(exportPath, storageGroup, device.getKey(), taskStartTime);
+            File f = new File(fileName);
+            if (!f.getParentFile().exists()) {
+                f.getParentFile().mkdirs();
+            }
+            TsFileWriter writer = new TsFileWriter(f);
+            //生成tablet
+            buildTablet(dataList, writer);
+            writer.close();
+            watch.stop();
+            LOG.info("device:{},start->{},end->{},数据量->{},耗时->{}",device.getKey(),taskStartTime,taskEndTime,dataList.size(), watch);
+            watch.reset();
+        } catch (Exception e) {
+            LOG.error("任务执行失败:",e);
+            throw new IoTDBSdkRuntimeException(e);
+        }
     }
 
     private String getTsFileName(String exportPath, String storageGroup, String device, long startTime){
@@ -101,45 +117,89 @@ public class TsFileTask implements Runnable{
         return filePath.concat(device).concat("/").concat(fileName);
     }
 
-    private void buildTablet(Map.Entry<String, List<String>> device, List<MetricData> dataList){
-        //以时间为纬度的插入数据结构
-        Map<Long, Map<String, MetricData>> dataMap = new HashMap<>();
-        //时间序列结构详情
-        Map<String, TimeseriesInfo> timeSeriesInfoMap = new HashMap<>();
-        dataList.stream().forEach(metricData -> {
+    private void buildTablet(List<MetricData> dataList, TsFileWriter writer) throws IOException, WriteProcessException {
+        //以设备-时间为纬度的插入数据结构
+        Map<String, Map<Long, Map<String, MetricData>>> dataMap = new HashMap<>();
+        //设备-时间序列结构详情
+        Map<String, Map<String, TimeseriesInfo>> timeSeriesInfoMap = new HashMap<>();
+        dataList.forEach(metricData -> {
             MetricTagMeta metricTagMeta = tagMap.get(metricData.getMetric());
+            if(metricTagMeta == null){
+                LOG.error("metric:{} not exit", metricData.getMetric());
+                return;
+            }
             TimeseriesInfo timeseriesInfo =
                     buildTimeseriesByMetricData(
                             storageGroup, metricTagMeta, metricTagMeta.getTagOrderList(), metricData.getTags());
 
-            Map<String, MetricData> timeDataMap =
-                    dataMap.computeIfAbsent(metricData.getTimestamp(), k -> new HashMap<>());
-            timeDataMap.put(timeseriesInfo.getMeasurement(), metricData);
-            timeSeriesInfoMap.put(timeseriesInfo.getFullPath(), timeseriesInfo);
+            metricData.setMetric(timeseriesInfo.getMeasurement());
+            Map<Long, Map<String, MetricData>> timeDataMap =
+                    dataMap.computeIfAbsent(timeseriesInfo.getEntity(), k -> new HashMap<>());
+            Map<String, MetricData> tDataMap =
+                    timeDataMap.computeIfAbsent(metricData.getTimestamp(), k -> new HashMap<>());
+            tDataMap.put(timeseriesInfo.getMeasurement(), metricData);
+
+            timeSeriesInfoMap.computeIfAbsent(timeseriesInfo.getEntity(), k -> new HashMap<>());
+            timeSeriesInfoMap
+                    .get(timeseriesInfo.getEntity())
+                    .put(timeseriesInfo.getFullPath(), timeseriesInfo);
         });
 
-        List<MeasurementSchema> schemaList =
-                timeSeriesInfoMap.values().stream()
-                        .map(t -> new MeasurementSchema(t.getMeasurement(), t.getType(), t.getEncoding(), t.getCompressor()))
-                        .collect(Collectors.toList());
-        tablet = new Tablet(device.getKey(), schemaList, dataMap.size());
-        tablet.initBitMaps();
-        for (Map.Entry<Long, Map<String, MetricData>> entry : dataMap.entrySet()) {
-            int rowIndex = tablet.rowSize++;
-            tablet.addTimestamp(rowIndex, entry.getKey());
-            int tIndex = 0;
-            for (TimeseriesInfo t : timeSeriesInfoMap.values()) {
-                MetricData metricData = entry.getValue().get(t.getMeasurement());
-                if (metricData == null) {
-                    tablet.bitMaps[tIndex].mark(rowIndex);
-                    tablet.addValue(t.getMeasurement(), rowIndex, null);
-                } else {
-                    tablet.addValue(
-                            t.getMeasurement(), rowIndex, null);
+        for(Map.Entry<String, Map<Long, Map<String, MetricData>>> entry : dataMap.entrySet()){
+            Map<Long, Map<String, MetricData>> childDataMap = entry.getValue();
+            Map<String, TimeseriesInfo> childTimeseriesInfoMap = timeSeriesInfoMap.get(entry.getKey());
+            List<MeasurementSchema> schemaList =
+                    childTimeseriesInfoMap.values().stream()
+                            .map(t -> new MeasurementSchema(t.getMeasurement(), t.getType(), t.getEncoding(), t.getCompressor()))
+                            .collect(Collectors.toList());
+            schemaList.forEach(schema -> {
+                try {
+                    writer.registerTimeseries(new Path(entry.getKey()), schema);
+                } catch (WriteProcessException e) {
+                    throw new RuntimeException(e);
                 }
-                tIndex++;
-            }
+            });
+            Tablet tablet = new Tablet(entry.getKey(), schemaList, childDataMap.size());
+            tablet.initBitMaps();
+            childDataMap.keySet().stream().sorted().forEach(key -> {
+                int rowIndex = tablet.rowSize++;
+                tablet.addTimestamp(rowIndex, key);
+                int tIndex = 0;
+                for (TimeseriesInfo t : childTimeseriesInfoMap.values()) {
+                    MetricData metricData = childDataMap.get(key).get(t.getMeasurement());
+                    if (metricData == null) {
+                        tablet.bitMaps[tIndex].mark(rowIndex);
+                        tablet.addValue(t.getMeasurement(), rowIndex, null);
+                    } else {
+                        tablet.addValue(
+                                t.getMeasurement(), rowIndex, convertFun(t.getType()).apply(metricData.getValue()));
+                    }
+                    tIndex++;
+                }
+            });
+            writer.write(tablet);
         }
+    }
+
+    private Function<Object, Object> convertFun(TSDataType dataType) {
+        return o -> {
+            switch (dataType) {
+                case INT32:
+                    return new BigDecimal(o.toString()).intValue();
+                case INT64:
+                    return new BigDecimal(o.toString()).longValue();
+                case TEXT:
+                    return String.valueOf(o.toString());
+                case FLOAT:
+                    return Float.parseFloat((String) o);
+                case DOUBLE:
+                    return Double.parseDouble(o.toString());
+                case BOOLEAN:
+                    return Boolean.parseBoolean(o.toString());
+                default:
+                    throw new IoTDBSdkRuntimeException("错误的数据类型");
+            }
+        };
     }
 
     private TimeseriesInfo buildTimeseriesByMetricData(
@@ -150,6 +210,9 @@ public class TsFileTask implements Runnable{
         // 根据元数据时间序列中存储的Tag顺序信息，进行业务数据时间序列的组装
         TimeseriesInfo dataTimeseries = new TimeseriesInfo();
         String measurement = KeywordUtil.metric(metaInfo.getMetric());
+        if(measurement.equals("version") || measurement.equals("timestamp")){
+            measurement = "metric_"+measurement;
+        }
         dataTimeseries.setEntity(getDevicePath(storageGroup, tagOrderList, metricTag));
         dataTimeseries.setAlias(metaInfo.getMetric());
         dataTimeseries.setMeasurement(measurement);
