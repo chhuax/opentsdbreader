@@ -2,6 +2,7 @@ package com.yonyou.iot.opentsdb.reader.tsfile;
 
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.json.JSONUtil;
+import com.alibaba.fastjson2.JSON;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.yonyou.iot.opentsdb.reader.conn.OpenTSDBConnection;
 import com.yonyou.iot.opentsdb.reader.opentsdbreader.MetricMetaInfo;
@@ -37,13 +38,20 @@ public class TsFile {
         DateTime startTime = new DateTime(Long.parseLong(properties.getProperty("task.startTime")));
         DateTime endTime = new DateTime(Long.parseLong(properties.getProperty("task.endTime")));
         String address = properties.getProperty("task.otsserver");
+        Set<String> deviceSet = JSON.parseObject(properties.getProperty("devices"), HashSet.class);
         OpenTSDBConnection tsdbConn = new OpenTSDBConnection(address);
         Map<String, MetricTagMeta> tagMap = buildTagMap();
-        Map<String, List<String>> metricMap = buildEntityMap(storageGroup, tagMap.values());
+        Map<String, List<String>> metricInitMap = buildEntityMap(storageGroup, tagMap.values());
+        Map<String, List<String>> metricMap = new HashMap<>();
+        for(Map.Entry<String, List<String>> entry : metricInitMap.entrySet()){
+            if(deviceSet.contains(entry.getKey())){
+                metricMap.put(entry.getKey(), entry.getValue());
+            }
+        }
         while (startTime.isBefore(endTime)) {
-            TsFileTask task = new TsFileTask(exportPath, storageGroup, tagMap, metricMap, startTime, startTime.plusMonths(1), tsdbConn);
+            TsFileTask task = new TsFileTask(exportPath, storageGroup, tagMap, metricMap, startTime, startTime.plusDays(1), tsdbConn);
             pool.execute(task);
-            startTime = startTime.plusMonths(1);
+            startTime = startTime.plusDays(1);
         }
 
         LOG.info("生成TsFile文件执行成功");
