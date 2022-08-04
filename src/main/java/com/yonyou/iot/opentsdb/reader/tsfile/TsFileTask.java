@@ -236,7 +236,7 @@ public class TsFileTask implements Runnable{
                     tag -> {
                         String tagValue = metricTag.get(tag.getTagName());
                         if (CharSequenceUtil.isNotEmpty(tagValue)) {
-                            builder.append(".`").append(KeywordUtil.tag(tagValue)).append("`");
+                            builder.append(".").append(KeywordUtil.tag(tagValue));
                         } else {
                             // 新增的数据已有tag不存在时，采用默认占位符占位
                             builder.append(".").append(NULL_TAG_PLACEHOLDER);
